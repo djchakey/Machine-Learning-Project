@@ -1,0 +1,149 @@
+---
+title: "Machine_Learning_Project2"
+author: "Dennis Chakey"
+date: "Thursday, June 18, 2015"
+output: 
+  html_document:
+    keep_md: true
+---
+
+
+# Practical Machine Learning Course Project
+The data source for this project resides at: http://groupware.les.inf.puc-rio.br/har.
+
+Background:
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+The goal of this project is to predict the manner of performing unilateral dumbbell biceps curls based on data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The 5 possible methods include -
+.A: exactly according to the specification 
+.B: throwing the elbows to the front
+.C: lifting the dumbbell only halfway 
+.D: lowering the dumbbell only halfway
+.E: throwing the hips to the front
+
+```{r}
+## Loading required package: lattice
+## Loading required package: ggplot2
+## Loading required package: foreach
+## Loading required package: iterators
+## Loading required package: parallel
+library(Hmisc)
+library(caret)
+library(randomForest)
+library(foreach)
+library(doParallel)
+```
+## The pml-training.csv data is used to create training and testing sets for fitting the model.
+## The pml-test.csv data is used to submit 20 test cases based on the fitted model.
+
+Read and Cleanse the data files
+All blank('""'), '#DIV/0' and 'NA' values are converted to 'NA'.
+
+```{r}
+trainingRaw <- read.csv(file="pml-training.csv", header=TRUE, as.is = TRUE, stringsAsFactors = FALSE, sep=',', na.strings=c('NA','','#DIV/0!'))
+testingRaw <- read.csv(file="pml-testing.csv", header=TRUE, as.is = TRUE, stringsAsFactors = FALSE, sep=',', na.strings=c('NA','','#DIV/0!'))
+
+trainingRaw$classe <- as.factor(trainingRaw$classe)  
+```
+
+## Display the data and verify data integrity
+
+```{r}
+str(trainingRaw)
+```
+
+## Discard the irrelevent variables (non-accelerometer measures) and additional problem data fields like the invalid dates
+## Compute the prediction only on the accelerometer data values of belt, forearm, arm and dumbell. 
+
+```{r}
+NAindex <- apply(trainingRaw,2,function(x) {sum(is.na(x))}) 
+trainingRaw <- trainingRaw[,which(NAindex == 0)]
+NAindex <- apply(testingRaw,2,function(x) {sum(is.na(x))}) 
+testingRaw <- testingRaw[,which(NAindex == 0)]
+```
+
+## Preprocessing variables
+
+```{r}
+
+v <- which(lapply(trainingRaw, class) %in% "numeric")
+
+preObj <-preProcess(trainingRaw[,v],method=c('knnImpute', 'center', 'scale'))
+trainLess1 <- predict(preObj, trainingRaw[,v])
+trainLess1$classe <- trainingRaw$classe
+
+testLess1 <-predict(preObj,testingRaw[,v])
+```
+
+## Eliminate the non zero variables to improve accuracy
+
+```{r}
+nzv <- nearZeroVar(trainLess1,saveMetrics=TRUE)
+trainLess1 <- trainLess1[,nzv$nzv==FALSE]
+
+nzv <- nearZeroVar(testLess1,saveMetrics=TRUE)
+testLess1 <- testLess1[,nzv$nzv==FALSE]
+```
+
+## Create cross validation set
+
+The training set is divided in two parts, one for training and the other for cross validation
+
+```{r}
+set.seed(20150618)
+inTrain = createDataPartition(trainLess1$classe, p = 3/4, list=FALSE)
+training = trainLess1[inTrain,]
+crossValidation = trainLess1[-inTrain,]
+```
+
+## Training Model
+
+Train model with Random Forest technique to achieve a greater accuracy level. The model is build on a training set of 28 variables from the initial 160. Cross validation is implemented as the train control method of choice.
+
+```{r}
+modFit <- train(classe ~., method="rf", data=training, trControl=trainControl(method='cv'), number=5, allowParallel=TRUE )
+modFit
+```
+
+## Training Prediction Set
+
+```{r}
+trainingPred <- predict(modFit, training)
+confusionMatrix(trainingPred, training$classe)
+```
+
+
+## Cross Validation Set
+
+```{r}
+cvPred <- predict(modFit, crossValidation)
+confusionMatrix(cvPred, crossValidation$classe)
+```
+
+## Predictions on the Real Testing Set
+
+```{r}
+testingPrediction <- predict(modFit, testLess1)
+testingPrediction
+```
+
+## Create the Answer Submittal Files Function
+
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+```
+
+## Create the Answer Submittal Files
+
+```{r}
+answers <- predict(modFit, testLess1)
+pml_write_files(answers)
+```
+
